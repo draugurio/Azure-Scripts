@@ -9,7 +9,7 @@
 
 .CHANGELOG
     MODIFIED : 2019-03-27
-    Added CMDB in the security storage account 
+    #Added CMDB in the security storage account. 
 
     MODIFIED : 2019-02-14
     #Added new field to know if a storage firewall is activated or not.
@@ -285,7 +285,9 @@ Write-Log -Message "Defining variables" -Debug
 $scriptName = $MyInvocation.MyCommand.Name
 $global:debug = ""
 $listMain = @()
-$fileName = "AzureInventoryPCIPRO"
+$fileName = "AzureInventoryPCIPRO_$(Get-date -Format "dd_MM_yyyy")"
+$blobName = "$((Get-Date).Year)/$([datetime]::Today.ToString('MM'))/$fileName.xlsx"
+
 $global:CsvPaths = @()
 $global:ListGlobal = @()
 $rgList = @()
@@ -297,7 +299,7 @@ $global:Directory = New-Item .\AzureCMDB -ItemType directory -Force
 #-----------------------------------------------------------
 $currentTime = (Get-Date).ToUniversalTime()
 $ConnectName = "AzureRunAsConnection" 
- <# 
+
 Write-Log -Message "Login using conection: $ConnectName" -Level Debug 
 try {
     # Get the connection "AzureRunAsConnection "
@@ -352,9 +354,10 @@ Foreach ($subscription in $listSubscriptions) {
         Add-Member -InputObject $resource -NotePropertyName "TagComplianceProfile" -NotePropertyValue $resource.tags.complianceProfile
         Add-Member -InputObject $resource -NotePropertyName "TagDescriptionByOwner" -NotePropertyValue $resource.tags.descriptionbyOwner
         Add-Member -InputObject $resource -NotePropertyName "TagEnvironment" -NotePropertyValue $resource.tags.environment
+        Add-Member -InputObject $resource -NotePropertyName "TagOwner" -NotePropertyValue $resource.tags.Owner
         Add-Member -InputObject $resource -NotePropertyName "Type" -NotePropertyValue $type
     }
-    $listMain += $resources | select Subscription,Location,ResourceGroupName,Name,Type,ResourceType,TagTier,TagComplianceProfile,TagDescriptionByOwner,TagEnvironment,Sku,ResourceId
+    $listMain += $resources | Sort-Object -Descending -Property Type |select Subscription,Location,ResourceGroupName,Name,Type,ResourceType,TagTier,TagComplianceProfile,TagDescriptionByOwner,TagOwner,TagEnvironment,Sku,ResourceId 
     ##################
     # RESOURCE GROUPS
     ##################
@@ -583,6 +586,7 @@ Foreach ($subscription in $listSubscriptions) {
                  ServerName = $resource.ServerName
                  DatabaseName = $resource.DatabaseName
                  MaxSizeBytes = $resource.MaxSizeBytes
+                 SKU = $resource.SkuName
                  PaaS = "Private"
                 }
             $ListSQL += $database
@@ -788,6 +792,7 @@ Foreach ($subscription in $listSubscriptions) {
             DescriptionByOwner = $virtualmachine.Tags.DescriptionByOwner
             VnicPrivateIpAllocationMethod = $VnicPrivateIpAllocationMethod -join "-"
             VnicPublicIpAddress = $VnicPublicIpAddress -join "-"
+            Scalon = $virtualmachine.Tags.Scalon
             DNS = $dns -join "-"
             Vnet = $vnets -join "*"
             Subnet = $subnets -join "*"
@@ -817,6 +822,7 @@ Foreach ($subscription in $listSubscriptions) {
     $rGroups = Get-AzureRmNetworkInterface | select ResourceGroupName -Unique
     foreach($vnetwork in $vnetworks) {
         $vnetworkName = $vnetwork.Name
+        Write-Log -Message "Start vNet loop for $vnetworkName" -Level Debug 
         $dns = @()
         #$subnetNetWorkSecuritygroup = ""
         foreach ( $dnsServer in $vnetwork.DhcpOptions.DnsServers) {
@@ -833,6 +839,7 @@ Foreach ($subscription in $listSubscriptions) {
         $vnicsNamesNet = @()
         #Loop Subnet
         $subs = $vnetwork.Subnets
+        Write-Log -Message "Start Subnet loop" -Level Debug 
         foreach ($sub in $subs) {
             $vnicsNamesSub = @()
             $subnetName = $sub.Name
@@ -842,7 +849,9 @@ Foreach ($subscription in $listSubscriptions) {
             else{$subnetNetWorkSecuritygroup = ""}
             foreach ($rGroup in $rGroups) {
                 $resourceGroupName = $rGroup.ResourceGroupName
+                Write-Log -Message "Start RG loop for $resourceGroupName of subnet $subnetName of vnet $vnetworkName" -Level Debug 
                 $checkVnics = Get-AzureRmNetworkInterface -ResourceGroupName $resourceGroupName
+                Write-Log -Message "End get vNics" -Level Debug 
                 if ($checkVnics) {
                     Write-Log -Message "There are vNics in $resourceGroupName of subnet $subnetName of vnet $vnetworkName" -Level Debug 
                     $vnics = $checkVnics | Where-Object {$_.IpConfigurations.Subnet.Id -eq $sub.id}
@@ -884,13 +893,15 @@ Foreach ($subscription in $listSubscriptions) {
                             VnicPublicIpAddress = $publicIpAddress
                             SubnetRouteTable = $subnetRouteTable
                             SubnetNetWorkSecuritygroup = $subnetNetWorkSecuritygroup
-                            ResourceID = $vnic.Id
+                            RerourceID = $vnic.Id
                         }
                         $vnicsNamesSub += $Vnic.Name
                         $ListVnic += $nic
                     }
                 }
-            }  
+            }
+            Write-Log -Message "End RG loop" -Level Debug 
+               
             #Subnet Object  
             $subnets = [pscustomobject]@{                    
                 #Add Suscription
@@ -1117,7 +1128,7 @@ Foreach ($subscription in $listSubscriptions) {
     $resources = Get-AzureRmRouteTable
     if ($resources) {
         foreach($resource in $resources){
-            $RouteTable = [pscustomobject]@{
+        $RouteTable = [pscustomobject]@{
                 Suscription = $SubscriptionName
                 ResourceGroup = $resource.ResourceGroupName
                 Name = $resource.Name
@@ -1287,6 +1298,7 @@ foreach( $ModuleObj in $global:ListGlobal) {
     write-host "module1 objec name" $ModuleObj.ModuleName
     SaveCSV -ModuleObj $ModuleObj
 }
+
 #Change Select Storage Account
 $storageAccountBackup  = Get-AzureRmStorageAccount | where {$_.Tags.Values -eq "Subscription Backup Storage"}
 Write-Output "- Storage Account selected $($storageAccountBackup.StorageAccountName) of RG $($storageAccountBackup.ResourceGroupName)."
@@ -1301,20 +1313,19 @@ foreach ($csvPath in $CsvPaths) {
     Set-AzureStorageBlobContent -Container $containerName -File $CsvPath -Context $context -Force
 }
 Write-Log -Message "Saving CSVs in Storage Account: Done"
-#Create Excel
-Write-Log -Message "Saving Excel $filename"
-$doc = New-SLDocument -WorkbookName $filename -Path $Directory -PassThru -Confirm:$false -Force
-Import-CSVToSLDocument -WorkBookInstance $doc -CSVFile @($CsvPaths) -AutofitColumns -ImportStartCell "A1"
-$doc | Save-SLDocument 
-Write-Log -Message "File saved to $Directory \ $filename .xlsx"
-# Upload Excel to Storage Account 
-Write-Log -Message "Saving Excel in Storage Account"
-Set-AzureStorageBlobContent -Container $containerName -File ./AzureCMDB/$filename".xlsx" -Context $context -Force
-Write-Log -Message "Saving Excel in Storage Account: Done"
-# Upload Log to Storage Account 
-Write-Log -Message "Saving MainLog in Storage Account"
-Set-AzureStorageBlobContent -Container $containerName -File .\Logs\MainLog.log -Context $context -Force
-
+    #Create Excel
+    Write-Log -Message "Saving Excel $filename"
+    $doc = New-SLDocument -WorkbookName $filename -Path $Directory -PassThru -Confirm:$false -Force
+    Import-CSVToSLDocument -WorkBookInstance $doc -CSVFile @($CsvPaths) -AutofitColumns -ImportStartCell "A1"
+    $doc | Save-SLDocument 
+    Write-Log -Message "File saved to $Directory \ $filename .xlsx"
+    # Upload Excel to Storage Account 
+    Write-Log -Message "Saving Excel in Storage Account"
+    Set-AzureStorageBlobContent -Container $containerName -File ./AzureCMDB/$filename".xlsx" -Blob $blobName -Context $context -Force
+    Write-Log -Message "Saving Excel in Storage Account: Done"
+    # Upload Log to Storage Account 
+    Write-Log -Message "Saving MainLog in Storage Account"
+    Set-AzureStorageBlobContent -Container $containerName -File .\Logs\MainLog.log -Context $context -Force
 # Upload Excel to Security Storage
     $storageAccountBackup  = Get-AzureRmStorageAccount | where {$_.Tags.Values -eq "Activity and Diagnostic Logs"}
     $SecretName = "MicrosoftStorage-storageAccounts-$($storageAccountBackup.StorageAccountName)-BFQT-SCO-RWDLACUP-Key1"
@@ -1329,7 +1340,7 @@ Set-AzureStorageBlobContent -Container $containerName -File .\Logs\MainLog.log -
     $Secret = Get-AzureKeyVaultSecret -VaultName $vault.VaultName -Name $SecretName
     $StorageNOPCI = New-AzureStorageContext -ConnectionString $Secret.SecretValueText
     Write-Log -Message "Saving Excel in Storage Account GTsI"
-    Set-AzureStorageBlobContent -Container $containerName -File ./AzureCMDB/$filename".xlsx" -Context $StorageNOPCI.Context -Force
+    Set-AzureStorageBlobContent -Container $containerName -File ./AzureCMDB/$filename".xlsx" -Blob $blobName -Context $StorageNOPCI.Context -Force
     Write-Log -Message "Saving Excel in Storage Account: Done"
 
 Write-Log -Message "Saving MainLog in Storage Account: Done"
