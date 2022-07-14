@@ -1,0 +1,15 @@
+$ResourceGroupName = ''
+$AutomationAccountName = ''
+
+# Get all variables
+$variables = Get-azAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName
+
+# parse through each unencrypted variable
+Foreach($var in $variables | Where-Object{$_.Encrypted -ne $True}){
+    
+    # remove the unencrypted variable
+    Remove-azAutomationVariable -ResourceGroupName $var.ResourceGroupName -AutomationAccountName $var.AutomationAccountName -Name $var.Name
+    
+    # recreate the variable, with the same values and encrypt it
+    New-azAutomationVariable -ResourceGroupName $var.ResourceGroupName -AutomationAccountName $var.AutomationAccountName -Name $var.Name -Encrypted $True -Value $var.Value -Description $var.Description
+}
